@@ -1,6 +1,3 @@
-
-
-
 #ifndef OBSTACLE_H
 #define OBSTACLE_H
 
@@ -215,11 +212,6 @@ void applyObstacleType(Obstacle& obs, int currentLevel = 1)
 	}
 }
 
-// Forward declaration -- full definition is with the rest of the Level 3
-// final-fight code further down this file; resetObstacles() below needs
-// to call it.
-void resetFinalFight();
-
 void resetRocket()
 {
 	rocket.width = 120;
@@ -286,7 +278,108 @@ void resetObstacles(int currentLevel = 1)
 	magnetTimeRemaining = 0.0f;
 
 	resetRocket();
-	resetFinalFight();
+}
+
+// -------------------------------------------------------
+// DRONE-PHASE FIELD HELPERS
+// Used by the 300m Drone Gauntlet (see drone.h) to clear the
+// obstacle field for its duration, then bring everything back
+// (freshly placed off-screen) once the gauntlet ends. Kept here
+// since they operate purely on obstacle.h's own data.
+// -------------------------------------------------------
+void clearFieldForDronePhase()
+{
+	for (int i = 0; i < MAX_OBSTACLES; i++) obstacles[i].active = false;
+	for (int i = 0; i < MAX_REGULAR_COINS; i++) coinItems[i].active = false;
+	fuelItem.active = false;
+	shieldItem.active = false;
+	magnetItem.active = false;
+	rocket.active = false;
+}
+
+void respawnFieldAfterDronePhase(int currentLevel)
+{
+	for (int i = 0; i < MAX_OBSTACLES; i++)
+	{
+		obstacles[i].x = 1280.0f + (i * 550.0f);
+		obstacles[i].type = nextObstacleType;
+		nextObstacleType = (nextObstacleType + 1) % 4;
+		applyObstacleType(obstacles[i], currentLevel);
+	}
+
+	for (int i = 0; i < MAX_REGULAR_COINS; i++)
+	{
+		coinItems[i].x = 1280.0f + (i * 220.0f);
+		coinItems[i].y = (float)getRandomCollectibleY();
+		coinItems[i].active = true;
+	}
+
+	fuelItem.x = obstacles[1].x + 250 + (rand() % 200);
+	fuelItem.y = (float)getRandomCollectibleY();
+	fuelItem.active = true;
+
+	shieldItem.active = false;  // resumes on its own 100m cadence
+	magnetItem.active = false;  // resumes on its own 100m cadence
+	rocket.active = false;
+}
+
+// -------------------------------------------------------
+// FUEL PICKUPS DURING THE DRONE ENCOUNTERS
+// The normal obstacle field is switched off in the 300m Drone
+// Gauntlet and the Final Fight, so the regular fuel spawner does
+// not run there. This re-uses fuelItem: a fresh pack scrolls in
+// every DRONE_FUEL_INTERVAL seconds (the first one after
+// DRONE_FUEL_FIRST_DELAY) and gives the same +35 fuel as usual.
+// -------------------------------------------------------
+const float DRONE_FUEL_INTERVAL = 5.5f;      // seconds between fuel packs
+const float DRONE_FUEL_FIRST_DELAY = 2.0f;   // first pack shows up quickly
+float droneFuelTimer = 0.0f;
+
+void resetDroneFuelPickup()
+{
+	droneFuelTimer = DRONE_FUEL_FIRST_DELAY;
+	fuelItem.active = false;
+	fuelItem.x = -200.0f;
+}
+
+void updateDroneFuelPickup(float speed, float charLeft, float charRight, float charBottom, float charTop,
+	float& currentFuel, float maxFuel)
+{
+	droneFuelTimer -= 0.016f;
+	if (droneFuelTimer <= 0.0f)
+	{
+		droneFuelTimer += DRONE_FUEL_INTERVAL;
+
+		if (!fuelItem.active)   // an uncollected pack is simply left to scroll by
+		{
+			fuelItem.x = 1280.0f + (rand() % 100);
+			fuelItem.y = (float)getRandomCollectibleY();
+			fuelItem.active = true;
+		}
+	}
+
+	if (!fuelItem.active) return;
+
+	fuelItem.x -= speed * 0.016f;
+	if (fuelItem.x < -60.0f)
+	{
+		fuelItem.active = false;
+		return;
+	}
+
+	if (charLeft < fuelItem.x + fuelItem.width && charRight > fuelItem.x &&
+		charBottom < fuelItem.y + fuelItem.height && charTop > fuelItem.y)
+	{
+		currentFuel += 35.0f;
+		if (currentFuel > maxFuel) currentFuel = maxFuel;
+		fuelItem.active = false;
+	}
+}
+
+void drawDroneFuelPickup()
+{
+	if (fuelItem.active)
+		iShowImage((int)fuelItem.x, (int)fuelItem.y, fuelItem.width, fuelItem.height, fuelImage);
 }
 
 bool checkCircleBoxCollision(float circleX, float circleY, float radius, float rectLeft, float rectRight, float rectBottom, float rectTop)
@@ -423,7 +516,8 @@ void updateObstacles(
 		}
 	}
 
-	if (lastShieldSpawnDistance - remainingDistance >= 100.0f)
+	// Level 1 has no shield power-up (Level 2 & Level 3 only)
+	if (currentLevel != 1 && lastShieldSpawnDistance - remainingDistance >= 100.0f)
 	{
 		shieldItem.x = 1280.0f + (rand() % 150);
 		shieldItem.y = (float)getRandomCollectibleY();
@@ -745,133 +839,6 @@ void drawObstacleShields(int currentLevel = 1)
 	}
 }
 
-// -------------------------------------------------------
-// LEVEL 3 FINAL FIGHT -- SECURITY ENEMIES
-// -------------------------------------------------------
-// After the Level 3 bonus coin phase ends, instead of an immediate win,
-// the player enters a short shooting-gallery boss fight against 3
-// "Security" enemies that walk in from the right side and hold position
-// while the player (near the left side) shoots them down with the
-// existing gun/bullet system. Each Security has SECURITY_HEALTH HP
-// (dies after that many bullet hits). Once all 3 are down, the level
-// is won. The same BonusBackground3 image (level3BackgroundImage) that
-// already draws behind Level 3 is reused here -- no change needed for
-// that, we just stop drawing obstacles/coins and draw the security
-// enemies instead.
-struct SecurityEnemy
-{
-	float x, y;
-	int width, height;
-	int health;
-	bool active;
-};
-
-#define MAX_SECURITY 3
-SecurityEnemy securities[MAX_SECURITY];
-int securityImage;
-
-bool isFinalFight = false;         // true for the whole boss-fight sequence
-bool showFinalRoundText = false;   // true while the "FINAL ROUND" banner is up
-float finalRoundTextTimer = 0.0f;
-const float FINAL_ROUND_TEXT_DURATION = 2.5f; // seconds the banner stays up
-bool finalFightActive = false;     // true once security enemies start moving/can be shot
-int securitiesAlive = 0;
-
-const int   SECURITY_HEALTH = 5;      // bullets needed to kill one Security
-const float SECURITY_SPEED = 260.0f;  // px/sec walking in from the right
-const float SECURITY_STOP_X = 880.0f; // x position where they hold and fight
-
-void resetFinalFight()
-{
-	isFinalFight = false;
-	showFinalRoundText = false;
-	finalFightActive = false;
-	finalRoundTextTimer = 0.0f;
-	securitiesAlive = 0;
-
-	for (int i = 0; i < MAX_SECURITY; i++)
-	{
-		securities[i].active = false;
-		securities[i].x = 1280.0f;
-		securities[i].y = 150.0f;
-		securities[i].width = 140;
-		securities[i].height = 190;
-		securities[i].health = SECURITY_HEALTH;
-	}
-}
-
-// Called once, right when the bonus phase finishes on Level 3.
-void startFinalFight()
-{
-	int rowY[MAX_SECURITY] = { 150, 300, 450 };
-
-	for (int i = 0; i < MAX_SECURITY; i++)
-	{
-		securities[i].width = 140;
-		securities[i].height = 190;
-		securities[i].x = 1280.0f + i * 220.0f; // staggered entrance
-		securities[i].y = (float)rowY[i];
-		securities[i].health = SECURITY_HEALTH;
-		securities[i].active = true;
-	}
-
-	securitiesAlive = MAX_SECURITY;
-	finalFightActive = false; // enemies wait off-screen until the banner finishes
-
-	isFinalFight = true;
-	showFinalRoundText = true;
-	finalRoundTextTimer = FINAL_ROUND_TEXT_DURATION;
-}
-
-// Advances the banner timer, walks the security enemies in, and declares
-// the win once every Security is dead. currentIsWin is set to true by
-// this function when the fight is won.
-void updateFinalFight(bool& currentIsWin)
-{
-	if (!isFinalFight) return;
-
-	if (showFinalRoundText)
-	{
-		finalRoundTextTimer -= 0.016f;
-		if (finalRoundTextTimer <= 0.0f)
-		{
-			finalRoundTextTimer = 0.0f;
-			showFinalRoundText = false;
-			finalFightActive = true;
-		}
-		return; // security enemies stay put off-screen while the banner is up
-	}
-
-	if (!finalFightActive) return;
-
-	for (int i = 0; i < MAX_SECURITY; i++)
-	{
-		if (!securities[i].active) continue;
-
-		if (securities[i].x > SECURITY_STOP_X)
-		{
-			securities[i].x -= SECURITY_SPEED * 0.016f;
-			if (securities[i].x < SECURITY_STOP_X) securities[i].x = SECURITY_STOP_X;
-		}
-	}
-
-	if (securitiesAlive <= 0)
-	{
-		isFinalFight = false;
-		finalFightActive = false;
-		currentIsWin = true;
-	}
-}
-
-void drawSecurities()
-{
-	for (int i = 0; i < MAX_SECURITY; i++)
-	{
-		if (securities[i].active)
-			iShowImage((int)securities[i].x, (int)securities[i].y, securities[i].width, securities[i].height, securityImage);
-	}
-}
-
 void loadObstacleImages()
 {
 	for (int i = 0; i < 4; i++)
@@ -894,7 +861,6 @@ void loadObstacleImages()
 	shieldImage = iLoadImage("Images//shield.png"); // Loads Images/shield.png
 	rocketImage = iLoadImage("Images//Rocket.png");
 	magnetImage = iLoadImage("Images//Magnet.png"); // Level 3 magnet power-up icon
-	securityImage = iLoadImage("Images//Security.png"); // Level 3 final-fight boss enemy
 }
 
 #endif // OBSTACLE_H

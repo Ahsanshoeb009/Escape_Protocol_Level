@@ -1,11 +1,9 @@
-
-
-
 #ifndef BULLET_H
 #define BULLET_H
 
 #include "iGraphics.h"
 #include "obstacle.h"
+#include "drone.h"
 #include <cmath>
 
 struct Bullet
@@ -23,9 +21,23 @@ Bullet bullets[MAX_BULLETS];
 bool isShooting = false;
 int bulletShootTimer = 0;
 
-// BULLET AMMO SYSTEM (shared by Level 2 & Level 3)
-int currentAmmo = 50;
-int maxAmmo = 50;
+// BULLET AMMO SYSTEM (Level 2 & Level 3 only -- Level 1 has no gun)
+//   Normal gameplay : each pickup gives +10 ammo.  Capacity: Level 2 = 20, Level 3 = 30.
+//   Final Fight     : each pickup gives +30 ammo.  Capacity: 50.
+const int LEVEL2_MAX_AMMO = 20;
+const int LEVEL3_MAX_AMMO = 30;
+const int FINAL_MAX_AMMO = 50;
+const int NORMAL_AMMO_PICKUP = 10;
+const int FINAL_AMMO_PICKUP = 30;
+
+int currentAmmo = LEVEL2_MAX_AMMO;
+int maxAmmo = LEVEL2_MAX_AMMO;
+
+int getMaxAmmoFor(int level, bool inFinalFight)
+{
+	if (inFinalFight) return FINAL_MAX_AMMO;
+	return (level == 3) ? LEVEL3_MAX_AMMO : LEVEL2_MAX_AMMO;
+}
 
 // BULLET COLLECTIBLE (Without External Image)
 struct BulletItem {
@@ -37,7 +49,7 @@ struct BulletItem {
 BulletItem bulletItem;
 float lastBulletReloadDistance = 500.0f;
 
-void resetBullets()
+void resetBullets(int level = 2)
 {
 	for (int i = 0; i < MAX_BULLETS; i++)
 	{
@@ -51,7 +63,8 @@ void resetBullets()
 
 	isShooting = false;
 	bulletShootTimer = 0;
-	currentAmmo = 50;
+	maxAmmo = getMaxAmmoFor(level, false);
+	currentAmmo = maxAmmo;          // a level starts with a full magazine
 
 	bulletItem.width = 35;
 	bulletItem.height = 35;
@@ -82,12 +95,17 @@ void updateBullets(bool inMenu, bool isWin, bool isLose, float playerX, float pl
 {
 	if (inMenu || isWin || isLose) return;
 
+	// Capacity depends on the level, and grows to 50 once the Final Fight starts.
+	maxAmmo = getMaxAmmoFor(currentLevel, isFinalFight);
+	if (currentAmmo > maxAmmo) currentAmmo = maxAmmo;
+
 	// Gun mechanic exists in Level 2 AND Level 3.
 	bool hasGun = (currentLevel == 2 || currentLevel == 3);
 
-	// While the "FINAL ROUND" banner is up, freeze auto-fire so the player
-	// can't waste ammo before the security enemies actually arrive.
-	if (hasGun && isShooting && currentAmmo > 0 && !showFinalRoundText)
+	// While the "FINAL ROUND" banner or the Drone Gauntlet (Phase 1) is up,
+	// freeze auto-fire. Phase 1 is a pure dodge encounter (no offense), and
+	// the banner shouldn't let the player waste ammo before enemies arrive.
+	if (hasGun && isShooting && currentAmmo > 0 && !showFinalRoundText && !isDronePhase1)
 	{
 		bulletShootTimer++;
 		if (bulletShootTimer % 8 == 0)
@@ -109,7 +127,7 @@ void updateBullets(bool inMenu, bool isWin, bool isLose, float playerX, float pl
 			continue;
 		}
 
-		// ROCKET COLLISION
+		// ROCKET COLLISION (regular Level 2/3 Rocket hazard)
 		if (rocket.active &&
 			bullets[i].x < rocket.x + rocket.width &&
 			bullets[i].x + bullets[i].width > rocket.x &&
@@ -126,35 +144,78 @@ void updateBullets(bool inMenu, bool isWin, bool isLose, float playerX, float pl
 			continue;
 		}
 
-		// SECURITY COLLISION (Level 3 final fight only)
-		if (currentLevel == 3 && isFinalFight)
+		// DRONE ROCKET COLLISION (Level 3 only: 100m Intrusion + Final Drone Fight)
+		// 2 bullet hits destroys a droneRocket before it can one-shot the player.
+		if (currentLevel == 3)
 		{
-			bool hitSecurity = false;
+			bool hitDroneRocket = false;
 
-			for (int s = 0; s < MAX_SECURITY; s++)
+			for (int r = 0; r < MAX_DRONE_ROCKETS; r++)
 			{
-				if (!securities[s].active) continue;
+				if (!droneRockets[r].active) continue;
 
-				if (bullets[i].x < securities[s].x + securities[s].width &&
-					bullets[i].x + bullets[i].width > securities[s].x &&
-					bullets[i].y < securities[s].y + securities[s].height &&
-					bullets[i].y + bullets[i].height > securities[s].y)
+				if (bullets[i].x < droneRockets[r].x + droneRockets[r].width &&
+					bullets[i].x + bullets[i].width > droneRockets[r].x &&
+					bullets[i].y < droneRockets[r].y + droneRockets[r].height &&
+					bullets[i].y + bullets[i].height > droneRockets[r].y)
 				{
 					bullets[i].active = false;
-					securities[s].health--;
+					droneRockets[r].health--;
 
-					if (securities[s].health <= 0)
+					if (droneRockets[r].health <= 0)
 					{
-						securities[s].active = false;
-						securitiesAlive--;
+						droneRockets[r].active = false;
 					}
 
-					hitSecurity = true;
+					hitDroneRocket = true;
 					break;
 				}
 			}
 
-			if (hitSecurity) continue;
+			if (hitDroneRocket) continue;
+
+			// FINAL FIGHT DRONES: each takes FINAL_DRONE_HEALTH (30) bullet hits
+			if (isFinalFight && finalFightActive)
+			{
+				bool hitDrone = false;
+				float dl, dr, db, dt;
+
+				if (drone1s[0].active)
+				{
+					getDrone1Hitbox(drone1s[0], dl, dr, db, dt);
+					if (bullets[i].x < dr && bullets[i].x + bullets[i].width > dl &&
+						bullets[i].y < dt && bullets[i].y + bullets[i].height > db)
+					{
+						bullets[i].active = false;
+						drone1s[0].health--;
+						if (drone1s[0].health <= 0)
+						{
+							drone1s[0].health = 0;
+							drone1s[0].active = false;
+						}
+						hitDrone = true;
+					}
+				}
+
+				if (!hitDrone && drone2.active)
+				{
+					getDrone2Hitbox(drone2, dl, dr, db, dt);
+					if (bullets[i].x < dr && bullets[i].x + bullets[i].width > dl &&
+						bullets[i].y < dt && bullets[i].y + bullets[i].height > db)
+					{
+						bullets[i].active = false;
+						drone2.health--;
+						if (drone2.health <= 0)
+						{
+							drone2.health = 0;
+							drone2.active = false;
+						}
+						hitDrone = true;
+					}
+				}
+
+				if (hitDrone) continue;
+			}
 		}
 
 		// DESTROYABLE OBSTACLE COLLISION
@@ -191,18 +252,45 @@ void updateBullets(bool inMenu, bool isWin, bool isLose, float playerX, float pl
 		}
 	}
 
-	// 100M AMMO PICKUP SPAWN & COLLISION LOGIC (Level 2 & Level 3)
-	if (hasGun)
+	// AMMO PICKUP SPAWN & COLLISION LOGIC (Level 2 & Level 3)
+	// Normal run: a new pickup every 100m.
+	// Final Fight (no distance left): a new pickup every FINAL_AMMO_INTERVAL (20) seconds.
+	// Suppressed during the Drone Gauntlet (Phase 1) since the field is
+	// otherwise fully cleared and shooting is disabled there anyway.
+	if (hasGun && !isDronePhase1)
 	{
 		float speed = 220.0f;
 		bulletItem.x -= speed * 0.016f;
 
-		if (lastBulletReloadDistance - remainingDistance >= 100.0f)
+		bool spawnPickup = false;
+
+		if (isFinalFight)
+		{
+			if (!finalFightActive)
+			{
+				bulletItem.active = false;   // "FINAL ROUND" banner still up: clear any leftover pickup
+			}
+			else
+			{
+				finalAmmoTimer -= 0.016f;
+				if (finalAmmoTimer <= 0.0f)
+				{
+					finalAmmoTimer += FINAL_AMMO_INTERVAL;
+					spawnPickup = true;
+				}
+			}
+		}
+		else if (lastBulletReloadDistance - remainingDistance >= 100.0f)
+		{
+			lastBulletReloadDistance = remainingDistance;
+			spawnPickup = true;
+		}
+
+		if (spawnPickup)
 		{
 			bulletItem.x = 1280.0f + (rand() % 150);
 			bulletItem.y = (float)(150 + (rand() % 300));
 			bulletItem.active = true;
-			lastBulletReloadDistance = remainingDistance;
 		}
 
 		float charLeft = playerX + 15;
@@ -216,7 +304,9 @@ void updateBullets(bool inMenu, bool isWin, bool isLose, float playerX, float pl
 			charBottom < bulletItem.y + bulletItem.height &&
 			charTop > bulletItem.y)
 		{
-			currentAmmo = maxAmmo; // Collect and reload to full
+			// Pickup adds ammo (not a full reload): +10 normally, +30 in the Final Fight
+			currentAmmo += isFinalFight ? FINAL_AMMO_PICKUP : NORMAL_AMMO_PICKUP;
+			if (currentAmmo > maxAmmo) currentAmmo = maxAmmo;
 			bulletItem.active = false;
 		}
 	}

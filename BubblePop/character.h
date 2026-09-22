@@ -135,7 +135,7 @@ void drawGun()
 	iRectangle(gx + 8, gy - 6, 8, 6);
 }
 
-void drawCharacter()
+void drawCharacter(bool withGun = true)
 {
 	if (isAirborne())
 	{
@@ -149,8 +149,8 @@ void drawCharacter()
 		iShowImage((int)characterX, (int)characterY, PLAYER_W, PLAYER_H, playerFrames[currentPlayerFrame]);
 	}
 
-	// Draw weapon directly in front of the player
-	drawGun();
+	// Draw weapon directly in front of the player (Level 2 & 3 only)
+	if (withGun) drawGun();
 
 	// -------------------------------------------------------
 	// TRANSPARENT BLUE SHIELD CIRCLE AROUND PLAYER

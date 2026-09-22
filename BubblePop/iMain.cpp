@@ -1,8 +1,9 @@
-
-#include "iGraphics.h"
+﻿#include "iGraphics.h"
 #include "menu.h"
+#include "profile.h"
 #include "obstacle.h"
 #include "character.h"
+#include "drone.h"
 #include "bullet.h"
 #include <mmsystem.h>
 #include <cstring>
@@ -19,20 +20,8 @@ bool showLevel2Intro = false;
 float remainingDistance = 700.0f;
 bool isWin = false;
 bool isLose = false;
+bool winRecorded = false;   // true once this win has been written to the save file
 
-// -------------------------------------------------------
-// DISTANCE / TIMING
-// -------------------------------------------------------
-// distanceRate controls how fast "remainingDistance" (the meters shown on
-// the HUD) counts down. It is set per-level in resetGame() below.
-//   Level 1 : 700 m,  rate 5.33 m/s  (unchanged, original feel)
-//   Level 2 : 500 m,  rate 5.33 m/s  (unchanged, original feel)
-//   Level 3 : 400 m,  rate 4.00 m/s  -> 400 / 4.00 = 100s = 1 min 40 sec
-// NOTE: fuel-drain and every other "meters" based rule (shield spawn every
-// 100m, ammo reload every 100m, +100 speed in final 300m, etc.) still use
-// the original fixed 5.33 constant, so gameplay difficulty/feel for
-// Level 1 & Level 2 is 100% unchanged. Only the Level 3 HUD-distance clock
-// runs at the special rate needed to hit exactly 1:40 for 400m.
 float distanceRate = 5.33f;
 
 bool isBonusPhase = false;
@@ -114,10 +103,10 @@ void updateCharacterAudio()
 // -------------------------------------------------------
 // BACKGROUND & FLOOR
 // -------------------------------------------------------
-int images[4];           // Level 1 animated background frames
-int level2Images[4];     // Level 2 animated background frames
-int bonusBackgroundImage;      // Bonus-phase background (all levels)
-int level3BackgroundImage;     // Level 3 main background (static, "BonusBackground3")
+int images[4];
+int level2Images[4];
+int bonusBackgroundImage;
+int level3BackgroundImage;
 int currentFrame = 0;
 
 void advanceFrame()
@@ -136,9 +125,6 @@ int floorHeight = 124;
 // -------------------------------------------------------
 void resetGame()
 {
-	// ---------------------------------------------------
-	// Per-level distance + distance-clock rate
-	// ---------------------------------------------------
 	if (currentLevel == 1)
 	{
 		remainingDistance = 700.0f;
@@ -152,11 +138,12 @@ void resetGame()
 	else if (currentLevel == 3)
 	{
 		remainingDistance = 400.0f;
-		distanceRate = 4.00f; // 400m / 4.00 m/s = 100s = 1 min 40 sec
+		distanceRate = 4.00f;
 	}
 
 	isWin = false;
 	isLose = false;
+	winRecorded = false;
 	isBonusPhase = false;
 	bonusDistance = 60.0f;
 	showLevel2Intro = false;
@@ -166,7 +153,8 @@ void resetGame()
 
 	resetCharacter();
 	resetObstacles(currentLevel);
-	resetBullets();
+	resetBullets(currentLevel);
+	resetDronePhases();
 
 	currentGroundSound = 0;
 }
@@ -188,9 +176,6 @@ void startLevel2()
 
 void startLevel3()
 {
-	// Level 3 reuses every Level-2 mechanic (gun/ammo, rocket, shield,
-	// destructible obstacle, bonus phase) -- only distance/time and the
-	// main background are different. See resetGame() and iDraw().
 	currentLevel = 3;
 	resetGame();
 	inMenu = false;
@@ -199,6 +184,20 @@ void startLevel3()
 // -------------------------------------------------------
 // UPDATE LOGIC (16 ms)
 // -------------------------------------------------------
+// Jetpack fuel burn. Same rate everywhere (normal run, 300m Drone Gauntlet, Final Fight).
+void updateFuelDrain()
+{
+	if (isAirborne() && isJumping)
+	{
+		currentFuel -= 5.33f * 0.016f * 1.25f;
+		if (currentFuel <= 0.0f)
+		{
+			currentFuel = 0.0f;
+			isJumping = false;
+		}
+	}
+}
+
 void updateFloor()
 {
 	if (inMenu || isWin || isLose || isPaused || showLevel2Intro) return;
@@ -217,8 +216,6 @@ void updateFloor()
 			bonusDistance = 0.0f;
 			isBonusPhase = false;
 
-			// Level 3 drops into the final "Security" shootout instead of
-			// winning immediately. Level 2 still wins immediately here.
 			if (currentLevel == 3)
 			{
 				startFinalFight();
@@ -234,24 +231,46 @@ void updateFloor()
 		return;
 	}
 
-	// -----------------------------------------------
-	// LEVEL 3 FINAL FIGHT (boss shootout vs. Security)
-	// Replaces normal obstacle/rocket/shield logic; only bullets still run.
-	// -----------------------------------------------
 	if (isFinalFight)
 	{
-		updateFinalFight(isWin);
+		updateFinalFight(isWin, isLose);
+
+		// Fuel works in the Final Fight too (only once the drones are live, not during the banner).
+		if (finalFightActive && !isWin && !isLose)
+		{
+			updateFuelDrain();
+			updateDroneFuelPickup(floorSpeed, charLeft, charRight, charBottom, charTop, currentFuel, maxFuel);
+		}
+
 		updateBullets(inMenu, isWin, isLose, characterX, characterY, currentLevel, remainingDistance);
 		updateCharacterAudio();
 		return;
 	}
 
-	// metersTraveled: FIXED rate, used for fuel-drain math only, so fuel
-	// balance stays identical across Level 1 / 2 / 3.
-	float metersTraveled = 5.33f * 0.016f;
+	// ---------------------------------------------------
+	// DRONE GAUNTLET 1 (300m remaining): takes over completely.
+	// Obstacles/fuel/etc are cleared, distance is frozen, pure
+	// dodge for 30 seconds. Bullets still update (so any bullet
+	// already in flight can travel off screen) but auto-fire and
+	// ammo pickups are suppressed inside bullet.h.
+	// ---------------------------------------------------
+	if (isDronePhase1)
+	{
+		updateDronePhase1(isLose, currentLevel);
 
-	// distanceTraveled: per-level rate, used ONLY to count down the
-	// on-screen "remainingDistance" clock (so Level 3 finishes in 1:40).
+		// Fuel works in the Gauntlet too. The isDronePhase1 check also skips the frame in
+		// which the phase just ended (the normal field, incl. its own fuel pack, is back by then).
+		if (isDronePhase1 && !showDrone1Warning && !isLose)
+		{
+			updateFuelDrain();
+			updateDroneFuelPickup(floorSpeed, charLeft, charRight, charBottom, charTop, currentFuel, maxFuel);
+		}
+
+		updateBullets(inMenu, isWin, isLose, characterX, characterY, currentLevel, remainingDistance);
+		updateCharacterAudio();
+		return;
+	}
+
 	float distanceTraveled = distanceRate * 0.016f;
 
 	if (remainingDistance > 0)
@@ -263,34 +282,58 @@ void updateFloor()
 
 			if (currentLevel == 2 || currentLevel == 3)
 			{
-				// Level 2 & Level 3 both drop into the bonus coin phase.
 				isBonusPhase = true;
 				bonusDistance = 60.0f;
 				initBonusCoins();
+
+				// If the 100m Drone Intrusion hadn't finished its 30s yet,
+				// end it cleanly so nothing lingers into the bonus round.
+				if (isDronePhase2) endDronePhase2();
 			}
 			else
 			{
-				// Level 1 has no bonus phase.
 				isWin = true;
 			}
 		}
 	}
 
-	if (isAirborne() && isJumping)
+	// ---------------------------------------------------
+	// DRONE PHASE TRIGGERS (Level 3 only, each fires exactly once)
+	// ---------------------------------------------------
+	if (currentLevel == 3)
 	{
-		currentFuel -= metersTraveled * 1.25f;
-		if (currentFuel <= 0.0f)
+		if (!dronePhase1Triggered && remainingDistance <= 300.0f)
 		{
-			currentFuel = 0.0f;
-			isJumping = false;
+			dronePhase1Triggered = true;
+			startDronePhase1();
+			updateCharacterAudio();
+			return; // field is cleared this same frame; resume normal updates next frame
+		}
+
+		if (!dronePhase2Triggered && remainingDistance <= 100.0f)
+		{
+			dronePhase2Triggered = true;
+			startDronePhase2();
 		}
 	}
+
+	updateFuelDrain();
 
 	float currentSpeed = floorSpeed;
 	if (remainingDistance <= 300) currentSpeed += 100.0f;
 
 	updateObstacles(currentSpeed, charLeft, charRight, charBottom, charTop, score, currentFuel, maxFuel, isLose, currentLevel, remainingDistance);
 	updateBullets(inMenu, isWin, isLose, characterX, characterY, currentLevel, remainingDistance);
+
+	// ---------------------------------------------------
+	// DRONE INTRUSION 2 (100m remaining): layered on top of the
+	// normal run above -- obstacles/fuel/coins keep working as usual.
+	// ---------------------------------------------------
+	if (isDronePhase2)
+	{
+		updateDronePhase2(isLose);
+	}
+
 	updateCharacterAudio();
 }
 
@@ -301,7 +344,7 @@ void updateJump()
 }
 
 // -------------------------------------------------------
-// TEXT WIDTH HELPER (for centering GLUT bitmap text exactly)
+// TEXT WIDTH HELPER
 // -------------------------------------------------------
 int getBitmapTextWidth(const char* text, void* font)
 {
@@ -311,6 +354,19 @@ int getBitmapTextWidth(const char* text, void* font)
 		width += glutBitmapWidth(font, *c);
 	}
 	return width;
+}
+
+// The Level 3 win screen carries the developer credits, so its box is taller
+// and its RESTART/MENU buttons sit lower to make room. Shared by iDraw()
+// (to draw them there) and iMouse() (so clicks are tested at the same spot).
+bool isFinalWin()
+{
+	return isWin && currentLevel == 3;
+}
+
+int winLoseButtonY()
+{
+	return isFinalWin() ? 100 : 240;
 }
 
 // -------------------------------------------------------
@@ -348,12 +404,8 @@ void iDraw()
 		return;
 	}
 
-	// -----------------------------------------------
-	// MAIN BACKGROUND -- kept explicitly per-level
-	// -----------------------------------------------
 	if (isBonusPhase)
 	{
-		// Bonus phase background is shared by every level (unchanged).
 		iShowImage(0, 0, 1280, 720, bonusBackgroundImage);
 	}
 	else if (currentLevel == 1)
@@ -366,9 +418,6 @@ void iDraw()
 	}
 	else if (currentLevel == 3)
 	{
-		// Level 3 main background is a single static image (BonusBackground3),
-		// not an animated 4-frame set. Also reused, unchanged, for the final
-		// Security shootout -- only what's drawn ON TOP of it changes.
 		iShowImage(0, 0, 1280, 720, level3BackgroundImage);
 	}
 
@@ -381,22 +430,34 @@ void iDraw()
 	}
 	else if (isFinalFight)
 	{
-		// No obstacles/coins during the final fight -- just the Security enemies.
-		drawSecurities();
+		drawDroneFuelPickup();
+		drawFinalDroneFight();
+	}
+	else if (isDronePhase1)
+	{
+		drawDroneFuelPickup();
+		drawDrone1Squad();
+		drawDroneBullets();
 	}
 	else
 	{
 		drawObstacles(currentLevel);
+
+		// Drone Intrusion (100m) is layered on top of the normal obstacle field.
+		if (isDronePhase2)
+		{
+			drawDrone2();
+			drawDroneRockets();
+		}
 	}
 
-	drawCharacter();
+	drawCharacter(currentLevel == 2 || currentLevel == 3);   // Level 1 has no gun
 
-	// Gun / bullets / shields: identical for Level 2 and Level 3 (final fight included).
 	if ((currentLevel == 2 || currentLevel == 3) && !isBonusPhase)
 	{
 		drawObstacleShields(currentLevel);
 		drawBullets();
-		drawBulletPickup(); // Draw bullet pickup item
+		drawBulletPickup();
 	}
 
 	if (DEBUG_HITBOXES && !isBonusPhase)
@@ -414,7 +475,9 @@ void iDraw()
 	if (isBonusPhase)
 		sprintf_s(distStr, "BONUS: %d m", (int)bonusDistance);
 	else if (isFinalFight)
-		sprintf_s(distStr, "SECURITY: %d", securitiesAlive);
+		sprintf_s(distStr, "FINAL FIGHT");
+	else if (isDronePhase1)
+		sprintf_s(distStr, "DODGE: %d s", (int)dronePhase1Timer);
 	else
 		sprintf_s(distStr, "Distance: %d m", (int)remainingDistance);
 
@@ -424,7 +487,14 @@ void iDraw()
 	sprintf_s(scoreStr, "Score: %d", score);
 	iText(1100, 45, scoreStr, GLUT_BITMAP_TIMES_ROMAN_24);
 
-	// FUEL BAR
+	// HEALTH BAR (Drone Gauntlet + Final Drone Fight only; sits just above the fuel bar)
+	bool showHealthBar = isDronePhase1 || (isFinalFight && finalFightActive);
+	if (showHealthBar)
+	{
+		drawHealthBar();
+	}
+
+	// FUEL BAR (always visible, including the drone encounters)
 	iSetColor(100, 100, 100);
 	iFilledRectangle(1050, 605, 180, 18);
 
@@ -436,8 +506,8 @@ void iDraw()
 	iRectangle(1050, 605, 180, 18);
 	iText(980, 608, "Fuel:", GLUT_BITMAP_HELVETICA_12);
 
-	// AMMO HUD BOX (Level 2 & Level 3)
-	if ((currentLevel == 2 || currentLevel == 3) && !isBonusPhase)
+	// AMMO HUD BOX (Level 2 & Level 3, hidden during the Drone Gauntlet since shooting is disabled there)
+	if ((currentLevel == 2 || currentLevel == 3) && !isBonusPhase && !isDronePhase1)
 	{
 		iSetColor(20, 30, 50);
 		iFilledRectangle(1050, 560, 180, 28);
@@ -455,28 +525,62 @@ void iDraw()
 	// -----------------------------------------------
 	if (isWin)
 	{
+		// Finishing Level 3 finishes the whole game, so that win screen is taller
+		// (extends further down; the top edge stays where the normal box's is)
+		// to fit the developer credits below the usual text.
+		int boxY = isFinalWin() ? 40 : 160;
+		int boxH = isFinalWin() ? 520 : 400;
+
 		iSetColor(15, 35, 80);
-		iFilledRectangle(340, 160, 600, 400);
+		iFilledRectangle(340, boxY, 600, boxH);
 		iSetColor(0, 210, 255);
-		iRectangle(340, 160, 600, 400);
+		iRectangle(340, boxY, 600, boxH);
 
 		iSetColor(255, 255, 255);
 		if (currentLevel == 2)
 			iText(440, 480, "500m COMPLETE! YOU WIN!", GLUT_BITMAP_TIMES_ROMAN_24);
 		else if (currentLevel == 3)
-			iText(400, 480, "SECURITY DEFEATED! YOU WIN!", GLUT_BITMAP_TIMES_ROMAN_24);
+			iText(400, 480, "DRONES DESTROYED! YOU WIN!", GLUT_BITMAP_TIMES_ROMAN_24);
 		else
 			iText(440, 480, "700m COMPLETE! EXCELLENT!", GLUT_BITMAP_TIMES_ROMAN_24);
 
+		// progress feedback (not shown in Test mode, and not after the last level)
+		if (!testMode && currentProfile >= 0 && currentLevel < TOTAL_LEVELS)
+		{
+			char unlockMsg[40];
+			sprintf_s(unlockMsg, "Level %d unlocked!", currentLevel + 1);
+			iSetColor(120, 255, 160);
+			iText(640 - getBitmapTextWidth(unlockMsg, GLUT_BITMAP_HELVETICA_18) / 2, 400, unlockMsg, GLUT_BITMAP_HELVETICA_18);
+		}
+
+		// DEVELOPER CREDITS -- shown once, on the screen that finishes the whole game
+		if (isFinalWin())
+		{
+			iSetColor(120, 220, 255);
+			const char* creditsHeading = "This game was developed by";
+			iText(640 - getBitmapTextWidth(creditsHeading, GLUT_BITMAP_HELVETICA_18) / 2, 420,
+				creditsHeading, GLUT_BITMAP_HELVETICA_18);
+
+			iSetColor(255, 255, 255);
+			const char* dev1 = "Mohammad Jahirul Islam (AUST CSE)";
+			const char* dev2 = "Fatmi Ahsan Shoeb (AUST CSE)";
+			const char* dev3 = "Promit Biswas Deb (AUST CSE)";
+			iText(640 - getBitmapTextWidth(dev1, GLUT_BITMAP_HELVETICA_18) / 2, 385, dev1, GLUT_BITMAP_HELVETICA_18);
+			iText(640 - getBitmapTextWidth(dev2, GLUT_BITMAP_HELVETICA_18) / 2, 355, dev2, GLUT_BITMAP_HELVETICA_18);
+			iText(640 - getBitmapTextWidth(dev3, GLUT_BITMAP_HELVETICA_18) / 2, 325, dev3, GLUT_BITMAP_HELVETICA_18);
+		}
+
+		int btnY = winLoseButtonY();
+
 		iSetColor(0, 120, 200);
-		iFilledRectangle(400, 240, 200, 50);
+		iFilledRectangle(400, btnY, 200, 50);
 		iSetColor(255, 255, 255);
-		iText(460, 258, "RESTART", GLUT_BITMAP_HELVETICA_18);
+		iText(460, btnY + 18, "RESTART", GLUT_BITMAP_HELVETICA_18);
 
 		iSetColor(20, 60, 130);
-		iFilledRectangle(680, 240, 200, 50);
+		iFilledRectangle(680, btnY, 200, 50);
 		iSetColor(255, 255, 255);
-		iText(750, 258, "MENU", GLUT_BITMAP_HELVETICA_18);
+		iText(750, btnY + 18, "MENU", GLUT_BITMAP_HELVETICA_18);
 	}
 
 	if (isLose)
@@ -550,10 +654,16 @@ void iDraw()
 		iText(640 - wBig / 2, 390, bigText, bigFont);
 
 		iSetColor(255, 255, 255);
-		const char* subText = "Security is inbound -- shoot them down!";
+		const char* subText = "Two drones inbound -- destroy them both!";
 		int wSub = getBitmapTextWidth(subText, GLUT_BITMAP_HELVETICA_18);
 		iText(640 - wSub / 2, 340, subText, GLUT_BITMAP_HELVETICA_18);
 	}
+
+	// -----------------------------------------------
+	// DRONE PHASE WARNING BANNERS
+	// -----------------------------------------------
+	drawDrone1Warning();
+	drawDrone2Warning();
 }
 
 // -------------------------------------------------------
@@ -568,6 +678,9 @@ void iPassiveMouseMove(int mx, int my)
 
 void iKeyboard(unsigned char key)
 {
+	// typing the player name (New Game) takes every key
+	if (handleNameInputCallbackKey(key)) return;
+
 	if (key == 'h' || key == 'H') DEBUG_HITBOXES = !DEBUG_HITBOXES;
 }
 
@@ -584,12 +697,14 @@ void iMouse(int button, int state, int mx, int my)
 
 		if (isWin || isLose)
 		{
-			if (mx >= 400 && mx <= 600 && my >= 240 && my <= 290)
+			int btnY = winLoseButtonY();   // matches wherever iDraw() put the buttons
+
+			if (mx >= 400 && mx <= 600 && my >= btnY && my <= btnY + 50)
 			{
 				resetGame();
 				return;
 			}
-			if (mx >= 680 && mx <= 880 && my >= 240 && my <= 290)
+			if (mx >= 680 && mx <= 880 && my >= btnY && my <= btnY + 50)
 			{
 				stopRunMusic();
 				stopJetpackMusic();
@@ -607,7 +722,7 @@ void iMouse(int button, int state, int mx, int my)
 				showLevel2Intro = false;
 				return;
 			}
-			return; // swallow other clicks while the intro popup is up
+			return;
 		}
 
 		if (!inMenu && !isWin && !isLose && !isPaused)
@@ -617,12 +732,11 @@ void iMouse(int button, int state, int mx, int my)
 				isJumping = true;
 			}
 
-			// Gun / shooting: identical for Level 2 and Level 3 (final fight
-			// included) -- but not while the "FINAL ROUND" banner is up.
-			if ((currentLevel == 2 || currentLevel == 3) && !isBonusPhase && !showFinalRoundText && currentAmmo > 0)
+			// Gun works in Level 2 & Level 3, except during the Bonus Phase,
+			// the "FINAL ROUND"/Drone banners, and the Drone Gauntlet (pure dodge, no offense).
+			if ((currentLevel == 2 || currentLevel == 3) && !isBonusPhase && !showFinalRoundText && !isDronePhase1 && currentAmmo > 0)
 			{
 				isShooting = true;
-				// Calibrated spawn offset matching higher gun barrel location
 				spawnBullet(characterX + 148, characterY + 145);
 			}
 		}
@@ -639,11 +753,6 @@ void iMouse(int button, int state, int mx, int my)
 	}
 }
 
-// Shared key-edge state for fixedUpdate. Kept at file scope (rather than as
-// separate `static` locals inside each branch of fixedUpdate) so a key that's
-// still physically held down across an inMenu/gameplay mode switch (e.g. the
-// ESC that both pauses and then exits pause) isn't misread as a brand new
-// press by the other branch.
 bool prevUpKey = false;
 bool prevDownKey = false;
 bool prevEnterKey = false;
@@ -656,8 +765,17 @@ void fixedUpdate()
 	bool curEnter = isKeyPressed(13);
 	bool curEsc = isKeyPressed(27);
 
+	// Save level progress the moment a level is won (skipped automatically in Test mode)
+	if (isWin && !winRecorded)
+	{
+		winRecorded = true;
+		recordLevelClear(currentLevel, score);   // level progress + this run's coin score
+	}
+
 	if (inMenu)
 	{
+		pollNameInputKeys();   // typing in the New Game name box
+
 		if (curUp    && !prevUpKey)    handleMenuSpecialKey(GLUT_KEY_UP);
 		if (curDown  && !prevDownKey)  handleMenuSpecialKey(GLUT_KEY_DOWN);
 		if (curEnter && !prevEnterKey) handleMenuKey(13);
@@ -670,8 +788,6 @@ void fixedUpdate()
 
 	if (showLevel2Intro)
 	{
-		// Freeze pause/jump handling while the intro popup is up; keep the
-		// key-edge trackers in sync so a held key isn't misread once it closes.
 		prevUpKey = curUp; prevDownKey = curDown;
 		prevEnterKey = curEnter; prevEscKey = curEsc;
 		return;
@@ -681,7 +797,6 @@ void fixedUpdate()
 	{
 		if (isWin || isLose)
 		{
-			// Win/Lose overlay already has its own buttons; ESC exits straight to menu.
 			isPaused = false;
 			stopRunMusic();
 			stopJetpackMusic();
@@ -690,12 +805,10 @@ void fixedUpdate()
 		}
 		else if (!isPaused)
 		{
-			// First ESC: pause the game.
 			isPaused = true;
 		}
 		else
 		{
-			// Second ESC while paused: quit out to the level selection screen.
 			isPaused = false;
 			stopRunMusic();
 			stopJetpackMusic();
@@ -709,7 +822,6 @@ void fixedUpdate()
 
 	if (curEnter && !prevEnterKey && isPaused && !isWin && !isLose)
 	{
-		// ENTER while paused: resume gameplay.
 		isPaused = false;
 	}
 
@@ -738,8 +850,8 @@ void loadImages()
 	loadMenuImages();
 	loadObstacleImages();
 	loadCharacterImages();
+	loadDroneImages();
 
-	// Level 1 animated background frames
 	for (int i = 0; i < 4; i++)
 	{
 		char path[100];
@@ -747,7 +859,6 @@ void loadImages()
 		images[i] = iLoadImage(path);
 	}
 
-	// Level 2 animated background frames
 	for (int i = 0; i < 4; i++)
 	{
 		char path[100];
@@ -755,12 +866,8 @@ void loadImages()
 		level2Images[i] = iLoadImage(path);
 	}
 
-	// Shared bonus-phase background (used by Level 2 & Level 3 bonus phase)
 	bonusBackgroundImage = iLoadImage("Images//BonusBackground.png");
-
-	// Level 3 main background -- single static image, as requested.
 	level3BackgroundImage = iLoadImage("Images//BonusBackground3.png");
-
 	floorImage = iLoadImage("Images//floor.png");
 }
 
@@ -769,6 +876,8 @@ void loadImages()
 // -------------------------------------------------------
 int main()
 {
+	loadProfiles();   // read savegame.txt (player names + progress)
+
 	iSetTimer(500, advanceMenuFrame);
 	iSetTimer(83, advanceFrame);
 	iSetTimer(83, updatePlayerAnimation);
