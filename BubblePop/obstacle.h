@@ -1,9 +1,11 @@
 
 
+
 #ifndef OBSTACLE_H
 #define OBSTACLE_H
 
 #include "iGraphics.h"
+#include "character.h"
 #include <cmath>
 #include <cstdlib>
 
@@ -14,7 +16,7 @@ struct Obstacle
 {
 	float x, y;
 	int width, height;
-	int type;      // 0 to 3 (Level 1 & Level 2)
+	int type;      // 0 to 3 (Level 1, Level 2 & Level 3)
 	int health;
 	bool active;
 };
@@ -24,11 +26,11 @@ struct Obstacle
 Obstacle obstacles[MAX_OBSTACLES];
 
 int obstacleImagesLvl1[4];
-int obstacleImagesLvl2[4];
+int obstacleImagesLvl2[4]; // shared visually by Level 2 AND Level 3
 int nextObstacleType = 0;
 
 // -------------------------------------------------------
-// ROCKET
+// ROCKET (Level 2 & Level 3)
 // -------------------------------------------------------
 struct Rocket
 {
@@ -44,7 +46,7 @@ int rocketImage;
 float lastRocketDistance = 500.0f;
 
 // -------------------------------------------------------
-// COLLECTIBLES
+// COLLECTIBLES & SHIELD SYSTEM
 // -------------------------------------------------------
 struct Collectible
 {
@@ -53,16 +55,36 @@ struct Collectible
 	bool active;
 };
 
-Collectible coinItem;
+#define MAX_REGULAR_COINS 8
+
+Collectible coinItems[MAX_REGULAR_COINS];
 Collectible fuelItem;
+Collectible shieldItem;
 
 int coinImage;
 int fuelImage;
+int shieldImage;
+
+float lastShieldSpawnDistance = 700.0f;
+float shieldActiveDistanceRemaining = 0.0f;
 
 // -------------------------------------------------------
-// BONUS COIN STREAM SYSTEM
+// MAGNET POWER-UP (Level 3 ONLY)
+// Spawns every 100m. On pickup, auto-collects every coin & fuel item
+// on screen for MAGNET_DURATION seconds (no need to touch them).
 // -------------------------------------------------------
-#define MAX_BONUS_COINS 12
+Collectible magnetItem;
+int magnetImage;
+
+float lastMagnetSpawnDistance = 400.0f;
+bool isMagnetActive = false;
+float magnetTimeRemaining = 0.0f;
+const float MAGNET_DURATION = 5.0f; // seconds
+
+// -------------------------------------------------------
+// BONUS COIN STREAM SYSTEM (Level 2 & Level 3 bonus phase)
+// -------------------------------------------------------
+#define MAX_BONUS_COINS 36
 
 struct BonusCoin {
 	float x, y;
@@ -73,8 +95,13 @@ BonusCoin bonusCoins[MAX_BONUS_COINS];
 
 void initBonusCoins() {
 	for (int i = 0; i < MAX_BONUS_COINS; i++) {
-		bonusCoins[i].x = 1280.0f + (i % 6) * 70.0f;
-		bonusCoins[i].y = (i < 6) ? 220.0f : 380.0f;
+		bonusCoins[i].x = 1280.0f + (i % 12) * 45.0f;
+
+		int tier = i / 12;
+		if (tier == 0)      bonusCoins[i].y = 200.0f;
+		else if (tier == 1) bonusCoins[i].y = 320.0f;
+		else                bonusCoins[i].y = 440.0f;
+
 		bonusCoins[i].active = true;
 	}
 }
@@ -84,7 +111,7 @@ void updateBonusCoins(float speed, float charLeft, float charRight, float charBo
 		bonusCoins[i].x -= speed * 0.016f;
 
 		if (bonusCoins[i].x < -50.0f) {
-			bonusCoins[i].x = 1280.0f + (rand() % 150);
+			bonusCoins[i].x = 1280.0f + (rand() % 200);
 			bonusCoins[i].active = true;
 		}
 
@@ -109,7 +136,7 @@ void drawBonusCoins() {
 }
 
 // -------------------------------------------------------
-// HITBOX INSETS
+// HITBOX INSETS (Level 1)
 // -------------------------------------------------------
 struct HitboxInset
 {
@@ -128,6 +155,19 @@ HitboxInset obstacleInsets[4][MAX_SUBBOXES] =
 	{ { 0.066f, 0.033f, 0.140f, 0.721f } }
 };
 
+// -------------------------------------------------------
+// LEVEL 2 / LEVEL 3 HITBOX SHAPES (shared)
+// -------------------------------------------------------
+struct EllipseHitbox { float rx, ry; };
+
+EllipseHitbox obstacleEllipse[4] =
+{
+	{ 0.23f, 0.35f },  // type0 - Obstacle11
+	{ 0.24f, 0.37f },  // type1 - Obstacle12
+	{ 0.22f, 0.39f },  // type2 - Obstacle13
+	{ 0.24f, 0.23f },  // type3 - Obstacle14
+};
+
 int getRandomCollectibleY()
 {
 	int positions[] = { 150, 220, 300, 380, 450 };
@@ -138,6 +178,8 @@ void applyObstacleType(Obstacle& obs, int currentLevel = 1)
 {
 	obs.active = true;
 
+	// NOTE: sizes below already default to the "Level 2 style" dimensions
+	// for any level that isn't Level 1 (i.e. Level 2 AND Level 3 share them).
 	if (obs.type == 0)
 	{
 		obs.width = (currentLevel == 1) ? 280 : 350;
@@ -150,7 +192,8 @@ void applyObstacleType(Obstacle& obs, int currentLevel = 1)
 	{
 		obs.width = (currentLevel == 1) ? 256 : 320;
 		obs.height = (currentLevel == 1) ? 144 : 180;
-		obs.health = (currentLevel == 2) ? 5 : 999;
+		// Destructible-by-bullets obstacle: Level 2 AND Level 3 both use it.
+		obs.health = (currentLevel == 2 || currentLevel == 3) ? 5 : 999;
 		int positions[] = { 124, 230, 380, 480 };
 		obs.y = (float)positions[rand() % 4];
 	}
@@ -171,6 +214,11 @@ void applyObstacleType(Obstacle& obs, int currentLevel = 1)
 		obs.y = (float)positions[rand() % 4];
 	}
 }
+
+// Forward declaration -- full definition is with the rest of the Level 3
+// final-fight code further down this file; resetObstacles() below needs
+// to call it.
+void resetFinalFight();
 
 void resetRocket()
 {
@@ -196,11 +244,14 @@ void resetObstacles(int currentLevel = 1)
 		applyObstacleType(obstacles[i], currentLevel);
 	}
 
-	coinItem.width = 40;
-	coinItem.height = 40;
-	coinItem.x = obstacles[0].x + 250 + (rand() % 200);
-	coinItem.y = (float)getRandomCollectibleY();
-	coinItem.active = true;
+	for (int i = 0; i < MAX_REGULAR_COINS; i++)
+	{
+		coinItems[i].width = 40;
+		coinItems[i].height = 40;
+		coinItems[i].x = 1280.0f + (i * 220.0f);
+		coinItems[i].y = (float)getRandomCollectibleY();
+		coinItems[i].active = true;
+	}
 
 	fuelItem.width = 50;
 	fuelItem.height = 50;
@@ -208,7 +259,34 @@ void resetObstacles(int currentLevel = 1)
 	fuelItem.y = (float)getRandomCollectibleY();
 	fuelItem.active = true;
 
+	// SHIELD ITEM RESET (Same dimensions as fuel item: 50x50)
+	shieldItem.width = 50;
+	shieldItem.height = 50;
+	shieldItem.x = -200.0f;
+	shieldItem.y = (float)getRandomCollectibleY();
+	shieldItem.active = false;
+
+	// Level 3 uses 400m, same 100m-interval spawn cadence as Level 2's 500m.
+	if (currentLevel == 1)      lastShieldSpawnDistance = 700.0f;
+	else if (currentLevel == 2) lastShieldSpawnDistance = 500.0f;
+	else if (currentLevel == 3) lastShieldSpawnDistance = 400.0f;
+
+	shieldActiveDistanceRemaining = 0.0f;
+	isShieldActive = false;
+
+	// MAGNET ITEM RESET (Level 3 only)
+	magnetItem.width = 50;
+	magnetItem.height = 50;
+	magnetItem.x = -200.0f;
+	magnetItem.y = (float)getRandomCollectibleY();
+	magnetItem.active = false;
+
+	lastMagnetSpawnDistance = 400.0f; // only ever used when currentLevel == 3
+	isMagnetActive = false;
+	magnetTimeRemaining = 0.0f;
+
 	resetRocket();
+	resetFinalFight();
 }
 
 bool checkCircleBoxCollision(float circleX, float circleY, float radius, float rectLeft, float rectRight, float rectBottom, float rectTop)
@@ -227,20 +305,46 @@ bool checkCircleBoxCollision(float circleX, float circleY, float radius, float r
 	return (dx * dx + dy * dy) <= (radius * radius);
 }
 
+bool checkEllipseBoxCollision(float ecx, float ecy, float rx, float ry,
+	float rectLeft, float rectRight, float rectBottom, float rectTop)
+{
+	if (rx <= 0.0f) rx = 0.0001f;
+	if (ry <= 0.0f) ry = 0.0001f;
+
+	float sLeft = (rectLeft - ecx) / rx;
+	float sRight = (rectRight - ecx) / rx;
+	float sBottom = (rectBottom - ecy) / ry;
+	float sTop = (rectTop - ecy) / ry;
+
+	float closestX = 0.0f;
+	if (closestX < sLeft)   closestX = sLeft;
+	if (closestX > sRight)  closestX = sRight;
+
+	float closestY = 0.0f;
+	if (closestY < sBottom) closestY = sBottom;
+	if (closestY > sTop)    closestY = sTop;
+
+	return (closestX * closestX + closestY * closestY) <= 1.0f;
+}
+
 bool checkObstacleCollision(const Obstacle& obs, float charLeft, float charRight, float charBottom, float charTop, int currentLevel = 1)
 {
 	if (!obs.active) return false;
 
-	if (currentLevel == 2)
+	// Level 2 AND Level 3 use the ellipse-shaped hitbox.
+	if (currentLevel == 2 || currentLevel == 3)
 	{
 		float centerX = obs.x + obs.width * 0.5f;
 		float centerY = obs.y + obs.height * 0.5f;
-		float minDimension = (obs.width < obs.height) ? (float)obs.width : (float)obs.height;
-		float radius = (minDimension * 0.5f) * 0.80f;
 
-		return checkCircleBoxCollision(centerX, centerY, radius, charLeft, charRight, charBottom, charTop);
+		const EllipseHitbox& e = obstacleEllipse[obs.type % 4];
+		float rx = obs.width  * e.rx;
+		float ry = obs.height * e.ry;
+
+		return checkEllipseBoxCollision(centerX, centerY, rx, ry, charLeft, charRight, charBottom, charTop);
 	}
 
+	// Level 1 uses the inset box hitbox.
 	float ox = obs.x;
 	float oy = obs.y;
 	float ow = (float)obs.width;
@@ -255,7 +359,7 @@ bool checkObstacleCollision(const Obstacle& obs, float charLeft, float charRight
 		float obsLeft = ox + ow * in.left;
 		float obsRight = ox + ow * (1.0f - in.right);
 		float obsBottom = oy + oh * in.bottom;
-		float obsTop = oy + oh * (1.0f - in.top);
+		float obsTop = oy + oh * in.top;
 
 		if (charLeft < obsRight && charRight > obsLeft && charBottom < obsTop && charTop > obsBottom)
 		{
@@ -268,7 +372,8 @@ bool checkObstacleCollision(const Obstacle& obs, float charLeft, float charRight
 
 void updateRocket(float remainingDistance, float charLeft, float charRight, float charBottom, float charTop, bool& isLose, int currentLevel)
 {
-	if (currentLevel != 2) return;
+	// Rocket hazard exists in Level 2 AND Level 3.
+	if (currentLevel != 2 && currentLevel != 3) return;
 
 	if (!rocket.active && (lastRocketDistance - remainingDistance >= 50.0f))
 	{
@@ -290,7 +395,10 @@ void updateRocket(float remainingDistance, float charLeft, float charRight, floa
 			charBottom < rocket.y + rocket.height &&
 			charTop > rocket.y)
 		{
-			isLose = true;
+			if (!isShieldActive)
+			{
+				isLose = true;
+			}
 		}
 	}
 }
@@ -300,6 +408,68 @@ void updateObstacles(
 	int& score, float& currentFuel, float maxFuel, bool& isLose,
 	int currentLevel = 1, float remainingDistance = 500.0f)
 {
+	// -------------------------------------------------------
+	// SHIELD DURATION & SPAWN SYSTEM (Every 100m, lasts 20m)
+	// -------------------------------------------------------
+	float metersTraveled = 5.33f * 0.016f;
+
+	if (isShieldActive)
+	{
+		shieldActiveDistanceRemaining -= metersTraveled;
+		if (shieldActiveDistanceRemaining <= 0.0f)
+		{
+			shieldActiveDistanceRemaining = 0.0f;
+			isShieldActive = false; // Deactivate shield after 20 meters
+		}
+	}
+
+	if (lastShieldSpawnDistance - remainingDistance >= 100.0f)
+	{
+		shieldItem.x = 1280.0f + (rand() % 150);
+		shieldItem.y = (float)getRandomCollectibleY();
+		shieldItem.active = true;
+		lastShieldSpawnDistance = remainingDistance;
+	}
+
+	// -------------------------------------------------------
+	// MAGNET POWER-UP: SPAWN (every 100m), PICKUP & COUNTDOWN
+	// Level 3 ONLY.
+	// -------------------------------------------------------
+	if (currentLevel == 3)
+	{
+		if (lastMagnetSpawnDistance - remainingDistance >= 100.0f)
+		{
+			magnetItem.x = 1280.0f + (rand() % 150);
+			magnetItem.y = (float)getRandomCollectibleY();
+			magnetItem.active = true;
+			lastMagnetSpawnDistance = remainingDistance;
+		}
+
+		magnetItem.x -= currentSpeed * 0.016f;
+
+		if (magnetItem.active &&
+			charLeft < magnetItem.x + magnetItem.width &&
+			charRight > magnetItem.x &&
+			charBottom < magnetItem.y + magnetItem.height &&
+			charTop > magnetItem.y)
+		{
+			isMagnetActive = true;
+			magnetTimeRemaining = MAGNET_DURATION;
+			magnetItem.active = false;
+		}
+
+		if (isMagnetActive)
+		{
+			magnetTimeRemaining -= 0.016f; // fixed 16ms tick
+			if (magnetTimeRemaining <= 0.0f)
+			{
+				magnetTimeRemaining = 0.0f;
+				isMagnetActive = false;
+			}
+		}
+	}
+
+	// OBSTACLES MOVEMENT AND COLLISION
 	for (int i = 0; i < MAX_OBSTACLES; i++)
 	{
 		obstacles[i].x -= currentSpeed * 0.016f;
@@ -319,39 +489,135 @@ void updateObstacles(
 
 		if (obstacles[i].active && checkObstacleCollision(obstacles[i], charLeft, charRight, charBottom, charTop, currentLevel))
 		{
-			isLose = true;
+			if (!isShieldActive)
+			{
+				// Non-lethal "drains half the fuel bar" obstacle: shared by
+				// Level 2 AND Level 3.
+				if ((currentLevel == 2 || currentLevel == 3) && obstacles[i].type == 3)
+				{
+					// Obstacle14.png: non-lethal hit - drains half the fuel bar instead of ending the run.
+					currentFuel -= maxFuel * 0.5f;
+					if (currentFuel < 0.0f) currentFuel = 0.0f;
+
+					obstacles[i].active = false; // consume this obstacle so it can't hit repeatedly while overlapping
+				}
+				else
+				{
+					isLose = true;
+				}
+			}
 		}
 	}
 
-	// COIN
-	coinItem.x -= currentSpeed * 0.016f;
-	if (coinItem.x < -50)
+	// COINS
+	// Magnet pull target: center of the character's hitbox.
+	float charCenterX = (charLeft + charRight) * 0.5f;
+	float charCenterY = (charBottom + charTop) * 0.5f;
+	const float MAGNET_PULL_SPEED = 1100.0f; // px/sec -- how fast coins/fuel fly toward the player
+	const float MAGNET_COLLECT_RADIUS = 35.0f; // how close counts as "collected"
+
+	for (int i = 0; i < MAX_REGULAR_COINS; i++)
 	{
-		coinItem.x = obstacles[0].x + 250 + (rand() % 250);
-		coinItem.y = (float)getRandomCollectibleY();
-		coinItem.active = true;
+		if (isMagnetActive && coinItems[i].active)
+		{
+			// Visibly fly toward the character instead of just scrolling left.
+			float targetX = charCenterX - coinItems[i].width * 0.5f;
+			float targetY = charCenterY - coinItems[i].height * 0.5f;
+
+			float dx = targetX - coinItems[i].x;
+			float dy = targetY - coinItems[i].y;
+			float dist = sqrtf(dx * dx + dy * dy);
+
+			if (dist > 1.0f)
+			{
+				coinItems[i].x += (dx / dist) * MAGNET_PULL_SPEED * 0.016f;
+				coinItems[i].y += (dy / dist) * MAGNET_PULL_SPEED * 0.016f;
+			}
+
+			if (dist < MAGNET_COLLECT_RADIUS)
+			{
+				score += 1;
+				coinItems[i].active = false;
+			}
+		}
+		else
+		{
+			coinItems[i].x -= currentSpeed * 0.016f;
+			if (coinItems[i].x < -50)
+			{
+				coinItems[i].x = 1280.0f + (rand() % 300);
+				coinItems[i].y = (float)getRandomCollectibleY();
+				coinItems[i].active = true;
+			}
+
+			bool touchingCoin = (charLeft < coinItems[i].x + coinItems[i].width && charRight > coinItems[i].x &&
+				charBottom < coinItems[i].y + coinItems[i].height && charTop > coinItems[i].y);
+
+			if (coinItems[i].active && touchingCoin)
+			{
+				score += 1;
+				coinItems[i].active = false;
+			}
+		}
 	}
 
-	if (coinItem.active && charLeft < coinItem.x + coinItem.width && charRight > coinItem.x && charBottom < coinItem.y + coinItem.height && charTop > coinItem.y)
+	// FUEL ITEM
+	if (isMagnetActive && fuelItem.active)
 	{
-		score += 1;
-		coinItem.active = false;
+		// Visibly fly toward the character instead of just scrolling left.
+		float targetX = charCenterX - fuelItem.width * 0.5f;
+		float targetY = charCenterY - fuelItem.height * 0.5f;
+
+		float dx = targetX - fuelItem.x;
+		float dy = targetY - fuelItem.y;
+		float dist = sqrtf(dx * dx + dy * dy);
+
+		if (dist > 1.0f)
+		{
+			fuelItem.x += (dx / dist) * MAGNET_PULL_SPEED * 0.016f;
+			fuelItem.y += (dy / dist) * MAGNET_PULL_SPEED * 0.016f;
+		}
+
+		if (dist < MAGNET_COLLECT_RADIUS)
+		{
+			currentFuel += 35.0f;
+			if (currentFuel > maxFuel) currentFuel = maxFuel;
+			fuelItem.active = false;
+		}
+	}
+	else
+	{
+		fuelItem.x -= currentSpeed * 0.016f;
+		if (fuelItem.x < -50)
+		{
+			fuelItem.x = obstacles[2].x + 250 + (rand() % 250);
+			fuelItem.y = (float)getRandomCollectibleY();
+			fuelItem.active = true;
+		}
+
+		bool touchingFuel = (charLeft < fuelItem.x + fuelItem.width && charRight > fuelItem.x &&
+			charBottom < fuelItem.y + fuelItem.height && charTop > fuelItem.y);
+
+		if (fuelItem.active && touchingFuel)
+		{
+			currentFuel += 35.0f;
+			if (currentFuel > maxFuel) currentFuel = maxFuel;
+			fuelItem.active = false;
+		}
 	}
 
-	// FUEL (3 times miss logic is removed completely)
-	fuelItem.x -= currentSpeed * 0.016f;
-	if (fuelItem.x < -50)
-	{
-		fuelItem.x = obstacles[2].x + 250 + (rand() % 250);
-		fuelItem.y = (float)getRandomCollectibleY();
-		fuelItem.active = true;
-	}
+	// SHIELD ITEM PICKUP MOVEMENT & COLLISION
+	shieldItem.x -= currentSpeed * 0.016f;
 
-	if (fuelItem.active && charLeft < fuelItem.x + fuelItem.width && charRight > fuelItem.x && charBottom < fuelItem.y + fuelItem.height && charTop > fuelItem.y)
+	if (shieldItem.active &&
+		charLeft < shieldItem.x + shieldItem.width &&
+		charRight > shieldItem.x &&
+		charBottom < shieldItem.y + shieldItem.height &&
+		charTop > shieldItem.y)
 	{
-		currentFuel += 35.0f;
-		if (currentFuel > maxFuel) currentFuel = maxFuel;
-		fuelItem.active = false;
+		isShieldActive = true;
+		shieldActiveDistanceRemaining = 20.0f; // Active for 20 meters
+		shieldItem.active = false;
 	}
 
 	updateRocket(remainingDistance, charLeft, charRight, charBottom, charTop, isLose, currentLevel);
@@ -363,23 +629,60 @@ void drawObstacles(int currentLevel = 1)
 	{
 		if (!obstacles[i].active) continue;
 
+		// Level 2 and Level 3 share the same obstacle artwork.
 		int imgToDraw;
-		if (currentLevel == 2) imgToDraw = obstacleImagesLvl2[obstacles[i].type % 4];
-		else                   imgToDraw = obstacleImagesLvl1[obstacles[i].type % 4];
+		if (currentLevel == 2 || currentLevel == 3) imgToDraw = obstacleImagesLvl2[obstacles[i].type % 4];
+		else                                         imgToDraw = obstacleImagesLvl1[obstacles[i].type % 4];
 
 		iShowImage((int)obstacles[i].x, (int)obstacles[i].y, obstacles[i].width, obstacles[i].height, imgToDraw);
 	}
 
-	if (coinItem.active) iShowImage((int)coinItem.x, (int)coinItem.y, coinItem.width, coinItem.height, coinImage);
+	for (int i = 0; i < MAX_REGULAR_COINS; i++)
+	{
+		if (coinItems[i].active)
+		{
+			iShowImage((int)coinItems[i].x, (int)coinItems[i].y, coinItems[i].width, coinItems[i].height, coinImage);
+		}
+	}
+
 	if (fuelItem.active) iShowImage((int)fuelItem.x, (int)fuelItem.y, fuelItem.width, fuelItem.height, fuelImage);
 
-	if (currentLevel == 2 && rocket.active)
+	// DRAW SHIELD PNG ITEM
+	if (shieldItem.active)
+	{
+		iShowImage((int)shieldItem.x, (int)shieldItem.y, shieldItem.width, shieldItem.height, shieldImage);
+	}
+
+	// DRAW MAGNET PNG ITEM (Level 3 only -- inactive/off-screen on other levels)
+	if (magnetItem.active)
+	{
+		iShowImage((int)magnetItem.x, (int)magnetItem.y, magnetItem.width, magnetItem.height, magnetImage);
+	}
+
+	// Rocket hazard rendering: Level 2 AND Level 3.
+	if ((currentLevel == 2 || currentLevel == 3) && rocket.active)
 	{
 		iShowImage((int)rocket.x, (int)rocket.y, rocket.width, rocket.height, rocketImage);
 	}
 }
 
-void drawObstacleHitboxes()
+// -------------------------------------------------------
+// DEBUG HITBOX OVERLAY
+// -------------------------------------------------------
+void drawEllipseOutline(float cx, float cy, float rx, float ry, int segments = 24)
+{
+	float prevX = cx + rx, prevY = cy;
+	for (int i = 1; i <= segments; i++)
+	{
+		float theta = (2.0f * 3.14159265f * i) / segments;
+		float x = cx + rx * cosf(theta);
+		float y = cy + ry * sinf(theta);
+		iLine((int)prevX, (int)prevY, (int)x, (int)y);
+		prevX = x; prevY = y;
+	}
+}
+
+void drawObstacleHitboxes(int currentLevel = 1)
 {
 	iSetColor(255, 0, 0);
 
@@ -388,15 +691,185 @@ void drawObstacleHitboxes()
 		Obstacle& o = obstacles[i];
 		if (!o.active) continue;
 
-		float cx = o.x + o.width * 0.5f;
-		float cy = o.y + o.height * 0.5f;
-		float minDimension = (o.width < o.height) ? (float)o.width : (float)o.height;
-		float r = (minDimension * 0.5f) * 0.80f;
-
-		iCircle((int)cx, (int)cy, (int)r);
+		if (currentLevel == 2 || currentLevel == 3)
+		{
+			float cx = o.x + o.width * 0.5f;
+			float cy = o.y + o.height * 0.5f;
+			const EllipseHitbox& e = obstacleEllipse[o.type % 4];
+			drawEllipseOutline(cx, cy, o.width * e.rx, o.height * e.ry);
+		}
+		else
+		{
+			int count = obstacleBoxCount[o.type];
+			for (int b = 0; b < count; b++)
+			{
+				const HitboxInset& in = obstacleInsets[o.type][b];
+				float obsLeft = o.x + o.width * in.left;
+				float obsRight = o.x + o.width * (1.0f - in.right);
+				float obsBottom = o.y + o.height * in.bottom;
+				float obsTop = o.y + o.height * (1.0f - in.top);
+				iRectangle((int)obsLeft, (int)obsBottom, (int)(obsRight - obsLeft), (int)(obsTop - obsBottom));
+			}
+		}
 	}
 
 	if (rocket.active) iRectangle((int)rocket.x, (int)rocket.y, rocket.width, rocket.height);
+}
+
+// -------------------------------------------------------
+// SHIELD VISUAL (destructible obstacle glow ring)
+// -------------------------------------------------------
+void drawObstacleShields(int currentLevel = 1)
+{
+	// Shown for Level 2 AND Level 3.
+	if (currentLevel != 2 && currentLevel != 3) return;
+
+	for (int i = 0; i < MAX_OBSTACLES; i++)
+	{
+		Obstacle& o = obstacles[i];
+		if (!o.active) continue;
+		if (o.health >= 999) continue;
+
+		float cx = o.x + o.width * 0.5f;
+		float cy = o.y + o.height * 0.5f;
+		const EllipseHitbox& e = obstacleEllipse[o.type % 4];
+		float rx = o.width * e.rx;
+		float ry = o.height * e.ry;
+
+		iSetColor(120, 200, 255);
+		drawEllipseOutline(cx, cy, rx, ry, 32);
+		drawEllipseOutline(cx, cy, rx - 3.0f, ry - 3.0f, 32);
+
+		iSetColor(200, 235, 255);
+		drawEllipseOutline(cx, cy, rx + 2.0f, ry + 2.0f, 32);
+	}
+}
+
+// -------------------------------------------------------
+// LEVEL 3 FINAL FIGHT -- SECURITY ENEMIES
+// -------------------------------------------------------
+// After the Level 3 bonus coin phase ends, instead of an immediate win,
+// the player enters a short shooting-gallery boss fight against 3
+// "Security" enemies that walk in from the right side and hold position
+// while the player (near the left side) shoots them down with the
+// existing gun/bullet system. Each Security has SECURITY_HEALTH HP
+// (dies after that many bullet hits). Once all 3 are down, the level
+// is won. The same BonusBackground3 image (level3BackgroundImage) that
+// already draws behind Level 3 is reused here -- no change needed for
+// that, we just stop drawing obstacles/coins and draw the security
+// enemies instead.
+struct SecurityEnemy
+{
+	float x, y;
+	int width, height;
+	int health;
+	bool active;
+};
+
+#define MAX_SECURITY 3
+SecurityEnemy securities[MAX_SECURITY];
+int securityImage;
+
+bool isFinalFight = false;         // true for the whole boss-fight sequence
+bool showFinalRoundText = false;   // true while the "FINAL ROUND" banner is up
+float finalRoundTextTimer = 0.0f;
+const float FINAL_ROUND_TEXT_DURATION = 2.5f; // seconds the banner stays up
+bool finalFightActive = false;     // true once security enemies start moving/can be shot
+int securitiesAlive = 0;
+
+const int   SECURITY_HEALTH = 5;      // bullets needed to kill one Security
+const float SECURITY_SPEED = 260.0f;  // px/sec walking in from the right
+const float SECURITY_STOP_X = 880.0f; // x position where they hold and fight
+
+void resetFinalFight()
+{
+	isFinalFight = false;
+	showFinalRoundText = false;
+	finalFightActive = false;
+	finalRoundTextTimer = 0.0f;
+	securitiesAlive = 0;
+
+	for (int i = 0; i < MAX_SECURITY; i++)
+	{
+		securities[i].active = false;
+		securities[i].x = 1280.0f;
+		securities[i].y = 150.0f;
+		securities[i].width = 140;
+		securities[i].height = 190;
+		securities[i].health = SECURITY_HEALTH;
+	}
+}
+
+// Called once, right when the bonus phase finishes on Level 3.
+void startFinalFight()
+{
+	int rowY[MAX_SECURITY] = { 150, 300, 450 };
+
+	for (int i = 0; i < MAX_SECURITY; i++)
+	{
+		securities[i].width = 140;
+		securities[i].height = 190;
+		securities[i].x = 1280.0f + i * 220.0f; // staggered entrance
+		securities[i].y = (float)rowY[i];
+		securities[i].health = SECURITY_HEALTH;
+		securities[i].active = true;
+	}
+
+	securitiesAlive = MAX_SECURITY;
+	finalFightActive = false; // enemies wait off-screen until the banner finishes
+
+	isFinalFight = true;
+	showFinalRoundText = true;
+	finalRoundTextTimer = FINAL_ROUND_TEXT_DURATION;
+}
+
+// Advances the banner timer, walks the security enemies in, and declares
+// the win once every Security is dead. currentIsWin is set to true by
+// this function when the fight is won.
+void updateFinalFight(bool& currentIsWin)
+{
+	if (!isFinalFight) return;
+
+	if (showFinalRoundText)
+	{
+		finalRoundTextTimer -= 0.016f;
+		if (finalRoundTextTimer <= 0.0f)
+		{
+			finalRoundTextTimer = 0.0f;
+			showFinalRoundText = false;
+			finalFightActive = true;
+		}
+		return; // security enemies stay put off-screen while the banner is up
+	}
+
+	if (!finalFightActive) return;
+
+	for (int i = 0; i < MAX_SECURITY; i++)
+	{
+		if (!securities[i].active) continue;
+
+		if (securities[i].x > SECURITY_STOP_X)
+		{
+			securities[i].x -= SECURITY_SPEED * 0.016f;
+			if (securities[i].x < SECURITY_STOP_X) securities[i].x = SECURITY_STOP_X;
+		}
+	}
+
+	if (securitiesAlive <= 0)
+	{
+		isFinalFight = false;
+		finalFightActive = false;
+		currentIsWin = true;
+	}
+}
+
+void drawSecurities()
+{
+	for (int i = 0; i < MAX_SECURITY; i++)
+	{
+		if (securities[i].active)
+			iShowImage((int)securities[i].x, (int)securities[i].y, securities[i].width, securities[i].height, securityImage);
+	}
 }
 
 void loadObstacleImages()
@@ -408,6 +881,7 @@ void loadObstacleImages()
 		obstacleImagesLvl1[i] = iLoadImage(path);
 	}
 
+	// Shared by Level 2 AND Level 3
 	for (int i = 0; i < 4; i++)
 	{
 		char path[100];
@@ -417,7 +891,10 @@ void loadObstacleImages()
 
 	coinImage = iLoadImage("Images//coin.png");
 	fuelImage = iLoadImage("Images//fuel.png");
+	shieldImage = iLoadImage("Images//shield.png"); // Loads Images/shield.png
 	rocketImage = iLoadImage("Images//Rocket.png");
+	magnetImage = iLoadImage("Images//Magnet.png"); // Level 3 magnet power-up icon
+	securityImage = iLoadImage("Images//Security.png"); // Level 3 final-fight boss enemy
 }
 
 #endif // OBSTACLE_H

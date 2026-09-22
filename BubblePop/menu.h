@@ -1,3 +1,4 @@
+
 #ifndef MENU_H
 #define MENU_H
 #include "iGraphics.h"
@@ -10,6 +11,7 @@ extern bool inMenu;
 extern void stopMenuMusic();   // defined in imain.cpp
 extern void startLevel1();     // defined in imain.cpp
 extern void startLevel2();     // defined in imain.cpp
+extern void startLevel3();     // defined in imain.cpp
 
 static int menuBg[2] = { 0, 0 };
 static int menuBgFrame = 0;
@@ -147,12 +149,10 @@ static void drawLevelSelect()
 	iSetColor(255, 255, 255);
 	iText(510, 610, "SELECT LEVEL", GLUT_BITMAP_TIMES_ROMAN_24);
 
-	// Level 1 & 2 -- active
+	// Level 1, 2 & 3 -- all active now
 	drawMenuButton(lvlBtn1X, lvlBtn1Y, lvlBtnW, lvlBtnH, "Level 1", levelSelected == 0, false);
 	drawMenuButton(lvlBtn2X, lvlBtn2Y, lvlBtnW, lvlBtnH, "Level 2", levelSelected == 1, false);
-
-	// Level 3 -- disabled (greyed out)
-	drawMenuButton(lvlBtn3X, lvlBtn3Y, lvlBtnW, lvlBtnH, "Level 3 (Coming Soon)", levelSelected == 2, true);
+	drawMenuButton(lvlBtn3X, lvlBtn3Y, lvlBtnW, lvlBtnH, "Level 3", levelSelected == 2, false);
 
 	// Back hint
 	iSetColor(150, 150, 150);
@@ -190,12 +190,13 @@ static void handleMenuMouseMove(int mx, int my)
 {
 	if (!inMenu) return;
 
-	// Level select hover -- Level 1 and Level 2 are selectable
+	// Level select hover -- Level 1, Level 2 and Level 3 are all selectable
 	if (inLevelSelect)
 	{
 		levelUsingKeyboard = false;
 		if (insideButton(mx, my, lvlBtn1X, lvlBtn1Y, lvlBtnW, lvlBtnH))      levelSelected = 0;
 		else if (insideButton(mx, my, lvlBtn2X, lvlBtn2Y, lvlBtnW, lvlBtnH)) levelSelected = 1;
+		else if (insideButton(mx, my, lvlBtn3X, lvlBtn3Y, lvlBtnW, lvlBtnH)) levelSelected = 2;
 		else                                                                 levelSelected = -1;
 		return;
 	}
@@ -216,7 +217,7 @@ static void confirmMenuSelection()
 	switch (menuSelected)
 	{
 	case 0: inLevelSelect = true; levelSelected = -1; levelUsingKeyboard = false; break;
-	case 1: /* Load Game */   break;
+		break;
 	case 2: aboutOpen = true; break;
 	case 3: exit(0);
 	default: break;
@@ -240,7 +241,12 @@ static void confirmLevelSelection()
 		stopMenuMusic();       // cut the menu track immediately
 		startLevel2();          // start Level 2 (sets inMenu = false)
 	}
-	// Level 3 does nothing (disabled)
+	else if (levelSelected == 2)
+	{
+		inLevelSelect = false;
+		stopMenuMusic();       // cut the menu track immediately
+		startLevel3();          // start Level 3 (sets inMenu = false)
+	}
 }
 
 // -------------------------------------------------------
@@ -265,7 +271,12 @@ static bool handleMenuClick(int mx, int my)
 			confirmLevelSelection();
 			return true;
 		}
-		// Level 3 clicks intentionally ignored (disabled)
+		if (insideButton(mx, my, lvlBtn3X, lvlBtn3Y, lvlBtnW, lvlBtnH))
+		{
+			levelSelected = 2;
+			confirmLevelSelection();
+			return true;
+		}
 		return true;
 	}
 
@@ -310,7 +321,7 @@ static void handleMenuSpecialKey(int key)
 {
 	if (!inMenu) return;
 
-	// Level select keyboard nav -- Level 1 and Level 2 are navigable
+	// Level select keyboard nav -- Level 1, Level 2 and Level 3 are navigable
 	if (inLevelSelect)
 	{
 		if (key == GLUT_KEY_UP || key == GLUT_KEY_DOWN)
@@ -322,9 +333,11 @@ static void handleMenuSpecialKey(int key)
 				return;
 			}
 
-			// Only two selectable options (0 and 1), so both
-			// directions simply toggle between them.
-			levelSelected = (levelSelected + 1) % 2;
+			// Three selectable options now (0, 1, 2).
+			if (key == GLUT_KEY_UP)
+				levelSelected = (levelSelected + 2) % 3; // step back (wraps)
+			if (key == GLUT_KEY_DOWN)
+				levelSelected = (levelSelected + 1) % 3; // step forward (wraps)
 		}
 		return;
 	}
@@ -348,3 +361,6 @@ static void handleMenuSpecialKey(int key)
 }
 
 #endif // MENU_H
+
+
+

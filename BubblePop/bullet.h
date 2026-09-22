@@ -1,5 +1,6 @@
 
 
+
 #ifndef BULLET_H
 #define BULLET_H
 
@@ -22,7 +23,7 @@ Bullet bullets[MAX_BULLETS];
 bool isShooting = false;
 int bulletShootTimer = 0;
 
-// BULLET AMMO SYSTEM
+// BULLET AMMO SYSTEM (shared by Level 2 & Level 3)
 int currentAmmo = 50;
 int maxAmmo = 50;
 
@@ -81,12 +82,18 @@ void updateBullets(bool inMenu, bool isWin, bool isLose, float playerX, float pl
 {
 	if (inMenu || isWin || isLose) return;
 
-	if (currentLevel == 2 && isShooting && currentAmmo > 0)
+	// Gun mechanic exists in Level 2 AND Level 3.
+	bool hasGun = (currentLevel == 2 || currentLevel == 3);
+
+	// While the "FINAL ROUND" banner is up, freeze auto-fire so the player
+	// can't waste ammo before the security enemies actually arrive.
+	if (hasGun && isShooting && currentAmmo > 0 && !showFinalRoundText)
 	{
 		bulletShootTimer++;
 		if (bulletShootTimer % 8 == 0)
 		{
-			spawnBullet(playerX + 110, playerY + 95);
+			// Calibrated start position to emerge directly from the higher gun barrel
+			spawnBullet(playerX + 148, playerY + 145);
 		}
 	}
 
@@ -119,6 +126,37 @@ void updateBullets(bool inMenu, bool isWin, bool isLose, float playerX, float pl
 			continue;
 		}
 
+		// SECURITY COLLISION (Level 3 final fight only)
+		if (currentLevel == 3 && isFinalFight)
+		{
+			bool hitSecurity = false;
+
+			for (int s = 0; s < MAX_SECURITY; s++)
+			{
+				if (!securities[s].active) continue;
+
+				if (bullets[i].x < securities[s].x + securities[s].width &&
+					bullets[i].x + bullets[i].width > securities[s].x &&
+					bullets[i].y < securities[s].y + securities[s].height &&
+					bullets[i].y + bullets[i].height > securities[s].y)
+				{
+					bullets[i].active = false;
+					securities[s].health--;
+
+					if (securities[s].health <= 0)
+					{
+						securities[s].active = false;
+						securitiesAlive--;
+					}
+
+					hitSecurity = true;
+					break;
+				}
+			}
+
+			if (hitSecurity) continue;
+		}
+
 		// DESTROYABLE OBSTACLE COLLISION
 		for (int obsIdx = 0; obsIdx < MAX_OBSTACLES; obsIdx++)
 		{
@@ -127,10 +165,18 @@ void updateBullets(bool inMenu, bool isWin, bool isLose, float playerX, float pl
 
 			if (obs.type == 1 && obs.health < 999)
 			{
-				if (bullets[i].x < obs.x + obs.width &&
-					bullets[i].x + bullets[i].width > obs.x &&
-					bullets[i].y < obs.y + obs.height &&
-					bullets[i].y + bullets[i].height > obs.y)
+				float cx = obs.x + obs.width * 0.5f;
+				float cy = obs.y + obs.height * 0.5f;
+				const EllipseHitbox& e = obstacleEllipse[obs.type % 4];
+				float rx = obs.width  * e.rx;
+				float ry = obs.height * e.ry;
+
+				float bLeft = bullets[i].x;
+				float bRight = bullets[i].x + bullets[i].width;
+				float bBottom = bullets[i].y;
+				float bTop = bullets[i].y + bullets[i].height;
+
+				if (checkEllipseBoxCollision(cx, cy, rx, ry, bLeft, bRight, bBottom, bTop))
 				{
 					bullets[i].active = false;
 					obs.health--;
@@ -145,8 +191,8 @@ void updateBullets(bool inMenu, bool isWin, bool isLose, float playerX, float pl
 		}
 	}
 
-	// 100M AMMO PICKUP SPAWN & COLLISION LOGIC
-	if (currentLevel == 2)
+	// 100M AMMO PICKUP SPAWN & COLLISION LOGIC (Level 2 & Level 3)
+	if (hasGun)
 	{
 		float speed = 220.0f;
 		bulletItem.x -= speed * 0.016f;
@@ -205,7 +251,7 @@ void drawBullets()
 	}
 }
 
-// DRAW CUSTOM BULLET PICKUP ITEM (WITH WATER-BLUE/WHITE SHIELD)
+// DRAW CUSTOM BULLET PICKUP ITEM
 void drawBulletPickup()
 {
 	if (!bulletItem.active) return;

@@ -1,6 +1,4 @@
-﻿
-
-#ifndef CHARACTER_H
+﻿#ifndef CHARACTER_H
 #define CHARACTER_H
 
 #include "iGraphics.h"
@@ -11,6 +9,7 @@
 float characterX = 200.0f;
 float characterY = 15.0f;
 bool  isJumping = false;   // true while space/LMB is held
+bool  isShieldActive = false; // TRUE when invincibility shield is active
 
 // -------------------------------------------------------
 // PLAYER HITBOX INSETS
@@ -47,6 +46,7 @@ void resetCharacter()
 {
 	characterY = GROUND_Y;
 	isJumping = false;
+	isShieldActive = false;
 	currentPlayerFrame = 0;
 }
 
@@ -101,6 +101,40 @@ void getCharacterAABB(float& left, float& right, float& bottom, float& top)
 	top = characterY + PLAYER_H * (1.0f - in.top);
 }
 
+// -------------------------------------------------------
+// DRAW GUN ATTACHED TO PLAYER HAND
+// -------------------------------------------------------
+void drawGun()
+{
+	// Anchor gun position relative to player's front hand
+	int gx = (int)characterX + 100;
+	int gy = (int)characterY + 140;
+
+	// 1. Grip / Handle
+	iSetColor(50, 50, 60);
+	iFilledRectangle(gx + 2, gy - 12, 8, 16);
+
+	// 2. Main Gun Receiver
+	iSetColor(70, 80, 95);
+	iFilledRectangle(gx, gy, 28, 12);
+
+	// 3. Gun Barrel
+	iSetColor(140, 150, 165);
+	iFilledRectangle(gx + 28, gy + 3, 16, 6);
+
+	// 4. Muzzle Tip
+	iSetColor(0, 210, 255);
+	iFilledRectangle(gx + 44, gy + 3, 4, 6);
+
+	// 5. Laser Sight / Scope Line
+	iSetColor(0, 230, 255);
+	iFilledRectangle(gx + 8, gy + 12, 18, 3);
+
+	// 6. Trigger Guard
+	iSetColor(120, 140, 160);
+	iRectangle(gx + 8, gy - 6, 8, 6);
+}
+
 void drawCharacter()
 {
 	if (isAirborne())
@@ -113,6 +147,32 @@ void drawCharacter()
 	else
 	{
 		iShowImage((int)characterX, (int)characterY, PLAYER_W, PLAYER_H, playerFrames[currentPlayerFrame]);
+	}
+
+	// Draw weapon directly in front of the player
+	drawGun();
+
+	// -------------------------------------------------------
+	// TRANSPARENT BLUE SHIELD CIRCLE AROUND PLAYER
+	// -------------------------------------------------------
+	if (isShieldActive)
+	{
+		// Adjusted offsets to perfectly center on the character model
+		float cx = characterX + (PLAYER_W * 0.50f); // Centered horizontally
+		float cy = characterY + (PLAYER_H * 0.50f); // Centered vertically
+		int r = (int)(PLAYER_W * 0.58f);            // Slightly enlarged radius to cover full body
+
+		// Layered semi-transparent concentric rings for cyan/blue shield effect
+		iSetColor(100, 200, 255);
+		iCircle((int)cx, (int)cy, r);
+		iCircle((int)cx, (int)cy, r - 2);
+
+		iSetColor(0, 160, 255);
+		iCircle((int)cx, (int)cy, r + 2);
+		iCircle((int)cx, (int)cy, r - 4);
+
+		iSetColor(180, 240, 255);
+		iCircle((int)cx, (int)cy, r + 4);
 	}
 }
 
