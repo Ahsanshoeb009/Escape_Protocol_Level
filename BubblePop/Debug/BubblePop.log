@@ -1,9 +1,9 @@
-﻿Build started 9/22/2026 5:45:59 PM.
-     1>Project "E:\Extra\Game_all_documents\Escape-Protocol\Game_Project\BubblePop\BubblePop.vcxproj" on node 2 (Build target(s)).
+﻿Build started 9/22/2026 4:02:25 PM.
+     1>Project "E:\Extra\Game_all_documents\Game_project_With_header\BubblePop\BubblePop.vcxproj" on node 2 (Build target(s)).
      1>Link:
-         BubblePop.vcxproj -> E:\Extra\Game_all_documents\Escape-Protocol\Game_Project\Debug\BubblePop.exe
-     1>Done Building Project "E:\Extra\Game_all_documents\Escape-Protocol\Game_Project\BubblePop\BubblePop.vcxproj" (Build target(s)).
+         BubblePop.vcxproj -> E:\Extra\Game_all_documents\Game_project_With_header\Debug\BubblePop.exe
+     1>Done Building Project "E:\Extra\Game_all_documents\Game_project_With_header\BubblePop\BubblePop.vcxproj" (Build target(s)).
 
 Build succeeded.
 
-Time Elapsed 00:00:00.35
+Time Elapsed 00:00:00.54
