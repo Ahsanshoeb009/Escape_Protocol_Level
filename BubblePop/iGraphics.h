@@ -3,9 +3,6 @@
 #ifndef IGRAPHICS_H
 #define IGRAPHICS_H
 
-#ifndef IGRAPHICS_H
-#define IGRAPHICS_H
-
 # include <stdio.h>
 # include <stdlib.h>
 #pragma comment(lib, "glut32.lib")
